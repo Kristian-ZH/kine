@@ -43,19 +43,25 @@ func New(c *Config) (Server, error) {
 
 	opts.ServerName = "server-" + strconv.Itoa(rand.Intn(1000))
 
-	clusterPort := os.Getenv("HOST_PORT")
-	strPort, _ := strconv.Atoi(clusterPort)
+	VM_IP := os.Getenv("VM_IP")
 
 	opts.Cluster = server.ClusterOpts{
 		Name: "test-cluster",
-		Host: "0.0.0.0",
-		Port: strPort,
+		Host: VM_IP,
+		Port: 4248,
 	}
 
-	if clusterPort != "4248" {
+	if VM_IP == "192.168.64.38" {
 		opts.Routes = []*url.URL{
 			{
-				Host:   "0.0.0.0:4248",
+				Host:   "192.168.64.39:4248",
+				Scheme: "nats",
+			},
+		}
+	} else {
+		opts.Routes = []*url.URL{
+			{
+				Host:   "192.168.64.38:4248",
 				Scheme: "nats",
 			},
 		}
