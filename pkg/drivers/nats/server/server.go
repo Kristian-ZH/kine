@@ -61,10 +61,10 @@ func New(c *Config) (Server, error) {
 		}
 	}
 
+	opts.Debug = true
+
 	srv, err := server.NewServer(opts)
-	if c.StdoutLogging {
-		srv.ConfigureLogger()
-	}
+	srv.ConfigureLogger()
 
 	return srv, err
 }
