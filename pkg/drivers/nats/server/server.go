@@ -5,6 +5,8 @@ package server
 
 import (
 	"fmt"
+	"net/url"
+	"os"
 
 	"github.com/nats-io/nats-server/v2/server"
 )
@@ -39,6 +41,23 @@ func New(c *Config) (Server, error) {
 	// TODO: Other defaults for embedded config?
 	// Explicitly set JetStream to true since we need the KV store.
 	opts.JetStream = true
+
+	clusterPort := os.Getenv("HOST_IP")
+
+	opts.Cluster = server.ClusterOpts{
+		Name: "test-cluster",
+		Host: "0.0.0.0",
+		Port: 4248,
+	}
+
+	if clusterPort != "4248" {
+		opts.Routes = []*url.URL{
+			{
+				Host:   "0.0.0.0:4248",
+				Scheme: "nats",
+			},
+		}
+	}
 
 	srv, err := server.NewServer(opts)
 	if c.StdoutLogging {
