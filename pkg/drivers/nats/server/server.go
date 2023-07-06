@@ -1,12 +1,11 @@
-//go:build nats
-// +build nats
-
 package server
 
 import (
 	"fmt"
+	"math/rand"
 	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/nats-io/nats-server/v2/server"
 )
@@ -42,12 +41,15 @@ func New(c *Config) (Server, error) {
 	// Explicitly set JetStream to true since we need the KV store.
 	opts.JetStream = true
 
-	clusterPort := os.Getenv("HOST_IP")
+	opts.ServerName = "server-" + strconv.Itoa(rand.Intn(1000))
+
+	clusterPort := os.Getenv("HOST_PORT")
+	strPort, _ := strconv.Atoi(clusterPort)
 
 	opts.Cluster = server.ClusterOpts{
 		Name: "test-cluster",
 		Host: "0.0.0.0",
-		Port: 4248,
+		Port: strPort,
 	}
 
 	if clusterPort != "4248" {
