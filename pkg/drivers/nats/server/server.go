@@ -42,7 +42,7 @@ func New(c *Config) (Server, error) {
 	opts.JetStream = true
 
 	opts.ServerName = "server-" + strconv.Itoa(rand.Intn(1000))
-	opts.StoreDir = "/nats/storage"
+	opts.StoreDir = "/root/nats/storage"
 
 	VM_IP := os.Getenv("VM_IP")
 
