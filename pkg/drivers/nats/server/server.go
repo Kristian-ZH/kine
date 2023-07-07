@@ -42,6 +42,7 @@ func New(c *Config) (Server, error) {
 	opts.JetStream = true
 
 	opts.ServerName = "server-" + strconv.Itoa(rand.Intn(1000))
+	opts.StoreDir = "/nats/storage"
 
 	VM_IP := os.Getenv("VM_IP")
 
@@ -57,11 +58,30 @@ func New(c *Config) (Server, error) {
 				Host:   "192.168.64.39:4248",
 				Scheme: "nats",
 			},
+			{
+				Host:   "192.168.64.40:4248",
+				Scheme: "nats",
+			},
+		}
+	} else if VM_IP == "192.168.64.39" {
+		opts.Routes = []*url.URL{
+			{
+				Host:   "192.168.64.38:4248",
+				Scheme: "nats",
+			},
+			{
+				Host:   "192.168.64.40:4248",
+				Scheme: "nats",
+			},
 		}
 	} else {
 		opts.Routes = []*url.URL{
 			{
 				Host:   "192.168.64.38:4248",
+				Scheme: "nats",
+			},
+			{
+				Host:   "192.168.64.39:4248",
 				Scheme: "nats",
 			},
 		}
