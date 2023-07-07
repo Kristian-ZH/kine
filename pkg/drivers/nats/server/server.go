@@ -52,36 +52,36 @@ func New(c *Config) (Server, error) {
 		Port: 4248,
 	}
 
-	if VM_IP == "192.168.64.38" {
+	if VM_IP == "192.168.64.41" {
 		opts.Routes = []*url.URL{
 			{
-				Host:   "192.168.64.39:4248",
+				Host:   "192.168.64.42:4248",
 				Scheme: "nats",
 			},
 			{
-				Host:   "192.168.64.40:4248",
+				Host:   "192.168.64.43:4248",
 				Scheme: "nats",
 			},
 		}
-	} else if VM_IP == "192.168.64.39" {
+	} else if VM_IP == "192.168.64.42" {
 		opts.Routes = []*url.URL{
 			{
-				Host:   "192.168.64.38:4248",
+				Host:   "192.168.64.41:4248",
 				Scheme: "nats",
 			},
 			{
-				Host:   "192.168.64.40:4248",
+				Host:   "192.168.64.43:4248",
 				Scheme: "nats",
 			},
 		}
 	} else {
 		opts.Routes = []*url.URL{
 			{
-				Host:   "192.168.64.38:4248",
+				Host:   "192.168.64.41:4248",
 				Scheme: "nats",
 			},
 			{
-				Host:   "192.168.64.39:4248",
+				Host:   "192.168.64.42:4248",
 				Scheme: "nats",
 			},
 		}
