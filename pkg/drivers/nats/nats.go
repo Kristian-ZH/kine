@@ -210,6 +210,7 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 	kvB := kv.NewEncodedKV(bucket, &kv.EtcdKeyCodec{}, &kv.S2ValueCodec{})
 
 	if err != nil {
+		fmt.Println("KRIS HERE GOT ERROR")
 		return nil, err
 	}
 
