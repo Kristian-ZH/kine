@@ -197,6 +197,10 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 	}
 
 	bucket, err := js.KeyValue(config.bucket)
+	if err != nil {
+		fmt.Println("FOUND THE ERROR")
+		fmt.Println(err)
+	}
 	if err != nil && err == nats.ErrBucketNotFound {
 		fmt.Println("KRIS ENTERED IN ERR CHECK")
 		bucket, err = js.CreateKeyValue(
