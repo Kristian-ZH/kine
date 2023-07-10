@@ -156,7 +156,7 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		logrus.Infof("started embedded NATS server")
 
 		// KRIS
-		//time.Sleep(45 * time.Second)
+		time.Sleep(45 * time.Second)
 
 		// Wait for the server to be ready.
 		// TODO: limit the number of retries?
