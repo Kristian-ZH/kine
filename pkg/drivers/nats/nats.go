@@ -32,6 +32,19 @@ const (
 
 var (
 	toplevelKeyMatch = regexp.MustCompile(`(/[^/]*/[^/]*)(/.*)?`)
+
+	// Missing errors in the nats.go client library.
+	jsClusterNotAvailErr = &nats.APIError{
+		Code:        503,
+		ErrorCode:   10008,
+		Description: "JetStream system temporarily unavailable",
+	}
+
+	jsNoSuitablePeersErr = &nats.APIError{
+		Code:        400,
+		ErrorCode:   10005,
+		Description: "no suitable peers for placement",
+	}
 )
 
 type Config struct {
@@ -155,16 +168,16 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		go ns.Start()
 		logrus.Infof("started embedded NATS server")
 
-		// KRIS
-		time.Sleep(45 * time.Second)
-
 		// Wait for the server to be ready.
 		// TODO: limit the number of retries?
+		var retries int
 		for {
 			if ns.ReadyForConnections(5 * time.Second) {
-				fmt.Println("KRIS RETURNED READY")
+				logrus.Infof("embedded NATS server is ready for client connections")
 				break
 			}
+			retries++
+			logrus.Infof("waiting for embedded NATS server to be ready: %d", retries)
 		}
 
 		// TODO: No method on backend.Driver exists to indicate a shutdown.
@@ -196,28 +209,37 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
-	bucket, err := js.KeyValue(config.bucket)
-	if err != nil {
-		fmt.Println("FOUND THE ERROR")
-		fmt.Println(err)
+	// Create the bucket if it doesn't exist. Note, this is a no-op if the bucket
+	// already exists with the same configuration.
+	var bucket nats.KeyValue
+	for {
+		bucket, err = js.CreateKeyValue(&nats.KeyValueConfig{
+			Bucket:      config.bucket,
+			Description: "Holds kine key/values",
+			History:     config.revHistory,
+			Replicas:    config.replicas,
+		})
+		if err == nil {
+			break
+		}
+		if err == context.DeadlineExceeded {
+			logrus.Warnf("timed out waiting for bucket %s to be created. retrying", config.bucket)
+			continue
+		}
+		// Check for temporary JetStream errors when the cluster is unhealthy and retry.
+		if jsClusterNotAvailErr.Is(err) || jsNoSuitablePeersErr.Is(err) {
+			logrus.Warnf(err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize KV bucket: %w", err)
+		}
 	}
-	if err != nil && err == nats.ErrBucketNotFound {
-		fmt.Println("KRIS ENTERED IN ERR CHECK")
-		bucket, err = js.CreateKeyValue(
-			&nats.KeyValueConfig{
-				Bucket:      config.bucket,
-				Description: "Holds kine key/values",
-				History:     config.revHistory,
-				Replicas:    config.replicas,
-			})
-	}
+
+	logrus.Infof("bucket initialized: %s", config.bucket)
 
 	kvB := kv.NewEncodedKV(bucket, &kv.EtcdKeyCodec{}, &kv.S2ValueCodec{})
-
-	if err != nil {
-		fmt.Println("KRIS HERE GOT ERROR")
-		return nil, err
-	}
 
 	return &Driver{
 		kv:            kvB,
