@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
-	"os"
 	"strconv"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -44,47 +43,29 @@ func New(c *Config) (Server, error) {
 	opts.ServerName = "server-" + strconv.Itoa(rand.Intn(1000))
 	opts.StoreDir = "/root/nats/storage"
 
-	VM_IP := os.Getenv("VM_IP")
+	opts.HTTPPort = 8000
+
+	// VM_IP := os.Getenv("VM_IP")
 
 	opts.Cluster = server.ClusterOpts{
 		Name: "test-cluster",
-		Host: VM_IP,
+		// Host: VM_IP,
 		Port: 4248,
 	}
 
-	if VM_IP == "192.168.64.41" {
-		opts.Routes = []*url.URL{
-			{
-				Host:   "192.168.64.42:4248",
-				Scheme: "nats",
-			},
-			{
-				Host:   "192.168.64.43:4248",
-				Scheme: "nats",
-			},
-		}
-	} else if VM_IP == "192.168.64.42" {
-		opts.Routes = []*url.URL{
-			{
-				Host:   "192.168.64.41:4248",
-				Scheme: "nats",
-			},
-			{
-				Host:   "192.168.64.43:4248",
-				Scheme: "nats",
-			},
-		}
-	} else {
-		opts.Routes = []*url.URL{
-			{
-				Host:   "192.168.64.41:4248",
-				Scheme: "nats",
-			},
-			{
-				Host:   "192.168.64.42:4248",
-				Scheme: "nats",
-			},
-		}
+	opts.Routes = []*url.URL{
+		{
+			Host:   "192.168.64.41:4248",
+			Scheme: "nats",
+		},
+		{
+			Host:   "192.168.64.42:4248",
+			Scheme: "nats",
+		},
+		{
+			Host:   "192.168.64.43:4248",
+			Scheme: "nats",
+		},
 	}
 
 	opts.Debug = true
