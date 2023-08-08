@@ -19,4 +19,5 @@ type Config struct {
 	ConfigFile    string
 	DontListen    bool
 	StdoutLogging bool
+	DataDir       string
 }

@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 )
 
-func NewEncodedKV(bucket nats.KeyValue, k KeyCodec, v ValueCodec) nats.KeyValue {
+func NewEncodedKV(bucket nats.KeyValue, k KeyCodec, v ValueCodec) *EncodedKV {
 	return &EncodedKV{bucket: bucket, keyCodec: k, valueCodec: v}
 }
 
@@ -165,23 +166,7 @@ func (e *EncodedKV) GetRevision(key string, revision uint64) (nats.KeyValueEntry
 	}, nil
 }
 
-func (e *EncodedKV) Put(key string, value []byte) (revision uint64, err error) {
-	ek, err := e.keyCodec.Encode(key)
-	if err != nil {
-		return 0, err
-	}
-
-	buf := new(bytes.Buffer)
-
-	err = e.valueCodec.Encode(value, buf)
-	if err != nil {
-		return 0, err
-	}
-
-	return e.bucket.Put(ek, buf.Bytes())
-}
-
-func (e *EncodedKV) Create(key string, value []byte) (revision uint64, err error) {
+func (e *EncodedKV) Create(key string, value []byte) (uint64, error) {
 	ek, err := e.keyCodec.Encode(key)
 	if err != nil {
 		return 0, err
@@ -197,7 +182,7 @@ func (e *EncodedKV) Create(key string, value []byte) (revision uint64, err error
 	return e.bucket.Create(ek, buf.Bytes())
 }
 
-func (e *EncodedKV) Update(key string, value []byte, last uint64) (revision uint64, err error) {
+func (e *EncodedKV) Update(key string, value []byte, last uint64) (uint64, error) {
 	ek, err := e.keyCodec.Encode(key)
 	if err != nil {
 		return 0, err
@@ -264,30 +249,79 @@ func (e *EncodedKV) History(key string, opts ...nats.WatchOpt) ([]nats.KeyValueE
 	return res, nil
 }
 
-func (e *EncodedKV) PutString(key string, value string) (revision uint64, err error) {
-	return e.Put(key, []byte(value))
-}
-func (e *EncodedKV) WatchAll(opts ...nats.WatchOpt) (nats.KeyWatcher, error) {
-	return e.bucket.WatchAll(opts...)
-}
-func (e *EncodedKV) Keys(opts ...nats.WatchOpt) ([]string, error) {
-	keys, err := e.bucket.Keys(opts...)
+// GetKeys returns all keys matching the prefix.
+func (e *EncodedKV) GetKeys(ctx context.Context, prefix string, sortResults bool) ([]string, error) {
+	watcher, err := e.Watch(prefix, nats.MetaOnly(), nats.IgnoreDeletes(), nats.Context(ctx))
 	if err != nil {
 		return nil, err
 	}
-	var res []string
-	for _, key := range keys {
-		dk, err := e.keyCodec.Decode(key)
+	defer func() {
+		err := watcher.Stop()
 		if err != nil {
-			// should not happen
-			logrus.Warnf("error decoding %s: %v", key, err)
+			logrus.Warnf("failed to stop %s getKeys watcher", prefix)
 		}
-		res = append(res, dk)
+	}()
+
+	var keys []string
+	// grab all matching keys immediately
+	for entry := range watcher.Updates() {
+		if entry == nil {
+			break
+		}
+		keys = append(keys, entry.Key())
 	}
 
-	return res, nil
+	if sortResults {
+		sort.Strings(keys)
+	}
+
+	return keys, nil
 }
 
-func (e *EncodedKV) Bucket() string                           { return e.bucket.Bucket() }
-func (e *EncodedKV) PurgeDeletes(opts ...nats.PurgeOpt) error { return e.bucket.PurgeDeletes(opts...) }
-func (e *EncodedKV) Status() (nats.KeyValueStatus, error)     { return e.bucket.Status() }
+// GetKeyValues returns a []nats.KeyValueEntry matching prefix
+func (e *EncodedKV) GetKeyValues(ctx context.Context, prefix string, sortResults bool) ([]nats.KeyValueEntry, error) {
+	watcher, err := e.bucket.Watch(prefix, nats.IgnoreDeletes(), nats.Context(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err := watcher.Stop()
+		if err != nil {
+			logrus.Warnf("failed to stop %s getKeyValues watcher", prefix)
+		}
+	}()
+
+	var entries []nats.KeyValueEntry
+	for entry := range watcher.Updates() {
+		if entry == nil {
+			break
+		}
+		entries = append(entries, entry)
+	}
+
+	if sortResults {
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Key() < entries[j].Key()
+		})
+	}
+
+	return entries, nil
+}
+
+// BucketSize returns the size of the bucket in bytes.
+func (e *EncodedKV) BucketSize() (int64, error) {
+	status, err := e.bucket.Status()
+	if err != nil {
+		return 0, err
+	}
+	return int64(status.Bytes()), nil
+}
+
+// BucketRevision returns the latest revision of the bucket.
+func (e *EncodedKV) BucketRevision() (int64, error) {
+	status, err := e.bucket.Status()
+	if err != nil {
+		return 0, err
+	}
+	return int64(status.(*nats.KeyValueBucketStatus).StreamInfo().State.LastSeq), nil
+}

@@ -25,6 +25,10 @@ func New(c *Config) (Server, error) {
 		}
 	}
 
+	// TODO: Other defaults for embedded config?
+	// Explicitly set JetStream to true since we need the KV store.
+	opts.JetStream = true
+
 	// Note, if don't listen is set, host and port will be ignored.
 	opts.DontListen = c.DontListen
 
@@ -35,10 +39,9 @@ func New(c *Config) (Server, error) {
 	if c.Port != 0 {
 		opts.Port = c.Port
 	}
-
-	// TODO: Other defaults for embedded config?
-	// Explicitly set JetStream to true since we need the KV store.
-	opts.JetStream = true
+	if c.DataDir != "" {
+		opts.StoreDir = c.DataDir
+	}
 
 	srv, err := server.NewServer(opts)
 	if c.StdoutLogging {
