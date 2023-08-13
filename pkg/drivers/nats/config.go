@@ -112,6 +112,12 @@ func parseConnection(dsn string, tlsInfo tls.Config) (*Config, error) {
 		config.clientOptions = append(config.clientOptions, nats.RootCAs(tlsInfo.CAFile))
 	}
 
+	// Simpler direct reference to creds file.
+	if f := queryMap.Get("credsFile"); f != "" {
+		config.clientOptions = append(config.clientOptions, nats.UserCredentials(f))
+	}
+
+	// Reference a full context file. Note this will override any other options.
 	if f := queryMap.Get("contextFile"); f != "" {
 		if u.Host != "" {
 			return config, fmt.Errorf("when using context endpoint no host should be provided")
