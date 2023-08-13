@@ -7,11 +7,11 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/k3s-io/kine/pkg/drivers/nats/kv"
 	natsserver "github.com/k3s-io/kine/pkg/drivers/nats/server"
 	"github.com/k3s-io/kine/pkg/server"
 	"github.com/k3s-io/kine/pkg/tls"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 )
 
@@ -115,12 +115,12 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	logrus.Infof("using bucket: %s", config.bucket)
 
-	conn, err := nats.Connect(config.clientURL, nopts...)
+	nc, err := nats.Connect(config.clientURL, nopts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS server: %w", err)
 	}
 
-	js, err := conn.JetStream()
+	js, err := nc.JetStream()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
@@ -155,7 +155,12 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	logrus.Infof("bucket initialized: %s", config.bucket)
 
-	ekv := kv.NewEncodedKV(bucket, &kv.EtcdKeyCodec{}, &kv.S2ValueCodec{})
+	njs, err := jetstream.New(nc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
+	}
+
+	ekv := NewKeyValue(ctx, bucket, njs)
 
 	// Reference the global logger, since it appears log levels are
 	// applied globally.
