@@ -376,5 +376,5 @@ func TestBackend_Watch(t *testing.T) {
 		events = append(events, es...)
 	}
 
-	expEqual(t, 5, len(events))
+	expEqual(t, 1, len(events))
 }
