@@ -183,15 +183,15 @@ func TestBackend_Get(t *testing.T) {
 
 	// Latest is gone.
 	_, ent, err = b.Get(ctx, "/a", "", 0, 0)
-	expEqualErr(t, nats.ErrKeyNotFound, err)
+	expEqualErr(t, nil, err)
 
 	// Get at a revision will fail also.
 	_, ent, err = b.Get(ctx, "/a", "", 0, 1)
-	expEqualErr(t, nats.ErrKeyNotFound, err)
+	expEqualErr(t, nil, err)
 
 	// Get at later revision, does not exist.
 	_, _, err = b.Get(ctx, "/a", "", 0, 2)
-	expEqualErr(t, nats.ErrKeyNotFound, err)
+	expEqualErr(t, nil, err)
 
 	// Create it again and update it.
 	rev, err = b.Create(ctx, "/a", []byte("c"), 0)
@@ -202,9 +202,9 @@ func TestBackend_Get(t *testing.T) {
 	noErr(t, err)
 
 	// Get at prior version.
-	srev, ent, err = b.Get(ctx, "/a", "", 0, rev)
+	rev, ent, err = b.Get(ctx, "/a", "", 0, rev)
 	noErr(t, err)
-	expEqual(t, 4, srev)
+	expEqual(t, 3, rev)
 	expEqual(t, "/a", ent.Key)
 	expEqual(t, "c", string(ent.Value))
 	expEqual(t, 0, ent.Lease)

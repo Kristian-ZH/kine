@@ -87,11 +87,11 @@ func (b *Backend) get(ctx context.Context, key string, revision int64, allowDele
 	var val natsData
 	err = val.Decode(entry)
 	if err != nil {
-		return rev, nil, err
+		return 0, nil, err
 	}
 
 	if val.Delete && !allowDeletes {
-		return rev, nil, nats.ErrKeyNotFound
+		return 0, nil, nats.ErrKeyNotFound
 	}
 
 	if b.isExpiredKey(&val) {
@@ -135,24 +135,27 @@ func (b *Backend) Count(ctx context.Context, prefix string) (int64, int64, error
 
 // Get returns the store's current revision, the associated server.KeyValue or an error.
 func (b *Backend) Get(ctx context.Context, key, rangeEnd string, limit, revision int64) (int64, *server.KeyValue, error) {
+	storeRev := b.kv.BucketRevision()
 	// Get the kv entry and return the revision.
-	_, nv, err := b.get(ctx, key, revision, false)
-	if err != nil {
-		return 0, nil, err
+	rev, nv, err := b.get(ctx, key, revision, false)
+	if err == nil {
+		if nv == nil {
+			return storeRev, nil, nil
+		}
+		return rev, nv.KV, nil
+	}
+	if err == nats.ErrKeyNotFound {
+		return storeRev, nil, nil
 	}
 
-	storeRev := b.kv.BucketRevision()
-	return storeRev, nv.KV, nil
+	return rev, nil, err
 }
 
 // Create attempts to create the key-value entry and returns the revision number.
 func (b *Backend) Create(ctx context.Context, key string, value []byte, lease int64) (int64, error) {
 	// Check if key exists already. If the entry exists even if marked as expired or deleted,
 	// the revision will be returned to apply an update.
-	rev, pnv, err := b.get(ctx, key, 0, false)
-	if pnv != nil {
-		return rev, server.ErrKeyExists
-	}
+	rev, pnv, err := b.get(ctx, key, 0, true)
 	// If an error other than key not found, return.
 	if err != nil && err != nats.ErrKeyNotFound {
 		return 0, err
@@ -171,20 +174,38 @@ func (b *Backend) Create(ctx context.Context, key string, value []byte, lease in
 		},
 	}
 
+	if pnv != nil {
+		if !pnv.Delete {
+			return 0, server.ErrKeyExists
+		}
+		nv.PrevRevision = pnv.KV.ModRevision
+	}
+
 	data, err := nv.Encode()
 	if err != nil {
 		return 0, err
 	}
 
+	if pnv != nil {
+		seq, err := b.kv.Update(key, data, uint64(rev))
+		if err != nil {
+			if jsWrongLastSeqErr.Is(err) {
+				b.l.Warnf("create conflict: key=%s, rev=%d, err=%s", key, rev, err)
+				return 0, server.ErrKeyExists
+			}
+			return 0, err
+		}
+
+		return int64(seq), nil
+	}
+
 	// An update with a zero revision will create the key.
 	seq, err := b.kv.Create(key, data)
 	if err != nil {
-		// This may occur if a concurrent writer created the key.
 		if jsWrongLastSeqErr.Is(err) {
-			b.l.Warnf("create: key=%s, err=%s", key, err)
+			b.l.Warnf("create conflict: key=%s, rev=0, err=%s", key, err)
 			return 0, server.ErrKeyExists
 		}
-
 		return 0, err
 	}
 
@@ -198,16 +219,14 @@ func (b *Backend) Delete(ctx context.Context, key string, revision int64) (int64
 		if err == nats.ErrKeyNotFound {
 			return rev, nil, true, nil
 		}
-		// TODO: if false, get the current KV.
-		// Expected last version is in the header.
 		return rev, nil, false, err
 	}
-
-	// If deleted
+	if value == nil {
+		return rev, nil, true, nil
+	}
 	if value.Delete {
 		return rev, value.KV, true, nil
 	}
-
 	if revision != 0 && value.KV.ModRevision != revision {
 		return rev, value.KV, false, nil
 	}
@@ -225,11 +244,19 @@ func (b *Backend) Delete(ctx context.Context, key string, revision int64) (int64
 	// Update with a tombstone.
 	drev, err := b.kv.Update(key, data, uint64(rev))
 	if err != nil {
+		if jsWrongLastSeqErr.Is(err) {
+			b.l.Warnf("delete conflict: key=%s, rev=%d, err=%s", key, rev, err)
+			return 0, nil, false, nil
+		}
 		return rev, value.KV, false, nil
 	}
 
 	err = b.kv.Delete(key, nats.LastRevision(drev))
 	if err != nil {
+		if jsWrongLastSeqErr.Is(err) {
+			b.l.Warnf("delete conflict: key=%s, rev=%d, err=%s", key, drev, err)
+			return 0, nil, false, nil
+		}
 		return rev, value.KV, false, nil
 	}
 
@@ -257,7 +284,7 @@ func (b *Backend) Update(ctx context.Context, key string, value []byte, revision
 		return rev, pnd.KV, false, nil
 	}
 
-	updateValue := natsData{
+	nd := natsData{
 		Delete:       false,
 		Create:       false,
 		PrevRevision: pnd.KV.ModRevision,
@@ -269,19 +296,28 @@ func (b *Backend) Update(ctx context.Context, key string, value []byte, revision
 		},
 	}
 
-	valueBytes, err := updateValue.Encode()
+	if pnd.KV.CreateRevision == 0 {
+		nd.KV.CreateRevision = rev
+	}
+
+	data, err := nd.Encode()
 	if err != nil {
 		return 0, nil, false, err
 	}
 
-	seq, err := b.kv.Update(key, valueBytes, uint64(revision))
+	seq, err := b.kv.Update(key, data, uint64(revision))
 	if err != nil {
+		// This may occur if a concurrent writer created the key.
+		if jsWrongLastSeqErr.Is(err) {
+			b.l.Warnf("update conflict: key=%s, rev=%d, err=%s", key, revision, err)
+			return 0, nil, false, nil
+		}
 		return 0, nil, false, err
 	}
 
-	updateValue.KV.ModRevision = int64(seq)
+	nd.KV.ModRevision = int64(seq)
 
-	return int64(seq), updateValue.KV, true, nil
+	return int64(seq), nd.KV, true, nil
 }
 
 // List returns a range of keys starting with the prefix.
@@ -341,13 +377,6 @@ func (b *Backend) Watch(ctx context.Context, prefix string, startRevision int64)
 				}
 
 				key := e.Key()
-
-				// Tombstone event in NATS KV, so this requires looking up
-				// the previous value based on the Expected-Last-Subject-Sequence
-				// header.
-				// TODO
-				//if op == nats.KeyValueDelete {
-				//}
 
 				var nd natsData
 				err := nd.Decode(e)
