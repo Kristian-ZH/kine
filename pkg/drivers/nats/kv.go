@@ -280,10 +280,8 @@ func (e *KeyValue) watchStream(ctx context.Context, filter, keyPrefix string, st
 		cfg.FilterSubjects = []string{filter}
 	}
 
-	if startRev < 0 {
+	if startRev <= 0 {
 		cfg.DeliverPolicy = jetstream.DeliverNewPolicy
-	} else if startRev == 0 {
-		cfg.DeliverPolicy = jetstream.DeliverAllPolicy
 	} else {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = startRev
