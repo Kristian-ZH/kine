@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/btree"
 )
@@ -48,7 +47,7 @@ func (e *entry) Operation() nats.KeyValueOp { return e.entry.Operation() }
 
 type KeyValue struct {
 	nkv     nats.KeyValue
-	njs     jetstream.JetStream
+	js      nats.JetStreamContext
 	kc      *keyCodec
 	vc      *valueCodec
 	bt      *btree.Map[string, []*seqOp]
@@ -63,8 +62,7 @@ type seqOp struct {
 }
 
 type streamWatcher struct {
-	con        jetstream.Consumer
-	conctx     jetstream.ConsumeContext
+	sub        *nats.Subscription
 	keyCodec   *keyCodec
 	valueCodec *valueCodec
 	updates    chan nats.KeyValueEntry
@@ -88,7 +86,7 @@ func (w *streamWatcher) Stop() error {
 	if w.cancel != nil {
 		w.cancel()
 	}
-	w.conctx.Stop()
+	w.sub.Drain()
 	return nil
 }
 
@@ -114,68 +112,6 @@ func (e *kvEntry) Revision() uint64           { return e.revision }
 func (e *kvEntry) Created() time.Time         { return e.created }
 func (e *kvEntry) Delta() uint64              { return e.delta }
 func (e *kvEntry) Operation() nats.KeyValueOp { return e.operation }
-
-func (e *KeyValue) newStreamWatcher(ctx context.Context, con jetstream.Consumer, keyPrefix string) (nats.KeyWatcher, error) {
-	w := &streamWatcher{
-		con:        con,
-		keyCodec:   e.kc,
-		valueCodec: e.vc,
-		updates:    make(chan nats.KeyValueEntry, 32),
-		keyPrefix:  keyPrefix,
-	}
-
-	w.ctx, w.cancel = context.WithCancel(ctx)
-
-	var (
-		conc jetstream.ConsumeContext
-		err  error
-	)
-
-	subjectPrefix := fmt.Sprintf("$KV.%s.", e.nkv.Bucket())
-
-	conc, err = con.Consume(func(msg jetstream.Msg) {
-		md, _ := msg.Metadata()
-		key := strings.TrimPrefix(msg.Subject(), subjectPrefix)
-
-		if keyPrefix != "" {
-			dkey, err := e.kc.Decode(strings.TrimPrefix(key, "."))
-			if err != nil || !strings.HasPrefix(dkey, keyPrefix) {
-				return
-			}
-		}
-
-		// Default is PUT
-		var op nats.KeyValueOp
-		switch msg.Headers().Get("KV-Operation") {
-		case "DEL":
-			op = nats.KeyValueDelete
-		case "PURGE":
-			op = nats.KeyValuePurge
-		}
-		// Not currently used...
-		delta := 0
-
-		w.updates <- &entry{
-			kc: e.kc,
-			vc: e.vc,
-			entry: &kvEntry{
-				key:       key,
-				bucket:    e.nkv.Bucket(),
-				value:     msg.Data(),
-				revision:  md.Sequence.Stream,
-				created:   md.Timestamp,
-				delta:     uint64(delta),
-				operation: op,
-			},
-		}
-	})
-	if err != nil {
-		return nil, err
-	}
-	w.conctx = conc
-
-	return w, nil
-}
 
 func (e *KeyValue) Get(key string) (nats.KeyValueEntry, error) {
 	ek, err := e.kc.Encode(key)
@@ -256,7 +192,7 @@ func (e *KeyValue) Delete(key string, opts ...nats.DeleteOpt) error {
 
 func (e *KeyValue) Watch(ctx context.Context, keys string, startRev int64) (nats.KeyWatcher, error) {
 	// Everything but the last token will be treated as a filter
-	// on the watcher. The last token will used as a receipt-time filter.
+	// on the watcher. The last token will used as a deliver-time filter.
 	filter := keys
 	if !strings.HasSuffix(filter, "/") {
 		idx := strings.LastIndexByte(filter, '/')
@@ -265,36 +201,78 @@ func (e *KeyValue) Watch(ctx context.Context, keys string, startRev int64) (nats
 		}
 	}
 
-	return e.watchStream(ctx, filter, keys, uint64(startRev))
-}
-
-func (e *KeyValue) watchStream(ctx context.Context, filter, keyPrefix string, startRev uint64) (nats.KeyWatcher, error) {
-	var cfg jetstream.OrderedConsumerConfig
+	sopts := []nats.SubOpt{
+		nats.BindStream(fmt.Sprintf("KV_%s", e.nkv.Bucket())),
+		nats.OrderedConsumer(),
+	}
 
 	if filter != "" {
 		p, err := e.kc.EncodeRange(filter)
 		if err != nil {
 			return nil, err
 		}
-		filter := fmt.Sprintf("$KV.%s.%s", e.nkv.Bucket(), p)
-		cfg.FilterSubjects = []string{filter}
+		filter = fmt.Sprintf("$KV.%s.%s", e.nkv.Bucket(), p)
 	}
 
 	if startRev <= 0 {
-		cfg.DeliverPolicy = jetstream.DeliverLastPerSubjectPolicy
+		sopts = append(sopts, nats.DeliverLastPerSubject())
 	} else {
-		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
-		cfg.OptStartSeq = startRev
+		sopts = append(sopts, nats.StartSequence(uint64(startRev)))
 	}
 
-	con, err := e.njs.OrderedConsumer(ctx, fmt.Sprintf("KV_%s", e.nkv.Bucket()), cfg)
+	wctx, cancel := context.WithCancel(ctx)
+	updates := make(chan nats.KeyValueEntry, 32)
+	subjectPrefix := fmt.Sprintf("$KV.%s.", e.nkv.Bucket())
+
+	handler := func(msg *nats.Msg) {
+		md, _ := msg.Metadata()
+		key := strings.TrimPrefix(msg.Subject, subjectPrefix)
+
+		if keys != "" {
+			dkey, err := e.kc.Decode(strings.TrimPrefix(key, "."))
+			if err != nil || !strings.HasPrefix(dkey, keys) {
+				return
+			}
+		}
+
+		// Default is PUT
+		var op nats.KeyValueOp
+		switch msg.Header.Get("KV-Operation") {
+		case "DEL":
+			op = nats.KeyValueDelete
+		case "PURGE":
+			op = nats.KeyValuePurge
+		}
+		// Not currently used...
+		delta := 0
+
+		updates <- &entry{
+			kc: e.kc,
+			vc: e.vc,
+			entry: &kvEntry{
+				key:       key,
+				bucket:    e.nkv.Bucket(),
+				value:     msg.Data,
+				revision:  md.Sequence.Stream,
+				created:   md.Timestamp,
+				delta:     uint64(delta),
+				operation: op,
+			},
+		}
+	}
+
+	sub, err := e.js.Subscribe(filter, handler, sopts...)
 	if err != nil {
 		return nil, err
 	}
 
-	w, err := e.newStreamWatcher(ctx, con, keyPrefix)
-	if err != nil {
-		return nil, err
+	w := &streamWatcher{
+		sub:        sub,
+		keyCodec:   e.kc,
+		valueCodec: e.vc,
+		updates:    updates,
+		ctx:        wctx,
+		cancel:     cancel,
 	}
 
 	return w, nil
@@ -499,10 +477,10 @@ func (e *KeyValue) List(prefix, startKey string, limit, revision int64) ([]nats.
 	return entries, nil
 }
 
-func NewKeyValue(ctx context.Context, bucket nats.KeyValue, njs jetstream.JetStream) *KeyValue {
+func NewKeyValue(ctx context.Context, bucket nats.KeyValue, js nats.JetStreamContext) *KeyValue {
 	kv := &KeyValue{
 		nkv: bucket,
-		njs: njs,
+		js:  js,
 		kc:  &keyCodec{},
 		vc:  &valueCodec{},
 		bt:  btree.NewMap[string, []*seqOp](0),
