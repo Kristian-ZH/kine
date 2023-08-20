@@ -11,7 +11,6 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 )
 
@@ -83,11 +82,8 @@ func setupBackend(t *testing.T) (*server.Server, *nats.Conn, *Backend) {
 	})
 	noErr(t, err)
 
-	njs, err := jetstream.New(nc)
-	noErr(t, err)
-
 	ctx := context.Background()
-	ekv := NewKeyValue(ctx, bkt, njs)
+	ekv := NewKeyValue(ctx, bkt, js)
 
 	l := logrus.New()
 	l.SetOutput(ioutil.Discard)

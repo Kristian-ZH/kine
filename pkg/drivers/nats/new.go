@@ -11,7 +11,6 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 	"github.com/k3s-io/kine/pkg/tls"
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 )
 
@@ -155,12 +154,7 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	logrus.Infof("bucket initialized: %s", config.bucket)
 
-	njs, err := jetstream.New(nc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
-	}
-
-	ekv := NewKeyValue(ctx, bucket, njs)
+	ekv := NewKeyValue(ctx, bucket, js)
 
 	// Reference the global logger, since it appears log levels are
 	// applied globally.
