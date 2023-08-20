@@ -221,6 +221,7 @@ func (e *KeyValue) Watch(ctx context.Context, keys string, startRev int64) (nats
 	}
 
 	wctx, cancel := context.WithCancel(ctx)
+
 	updates := make(chan nats.KeyValueEntry, 32)
 	subjectPrefix := fmt.Sprintf("$KV.%s.", e.nkv.Bucket())
 
@@ -263,6 +264,7 @@ func (e *KeyValue) Watch(ctx context.Context, keys string, startRev int64) (nats
 
 	sub, err := e.js.Subscribe(filter, handler, sopts...)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
