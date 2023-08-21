@@ -114,6 +114,21 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	logrus.Infof("using bucket: %s", config.bucket)
 
+	nopts = append(nopts,
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			logrus.Errorf("NATS disconnected: %s", err)
+		}),
+		nats.DiscoveredServersHandler(func(nc *nats.Conn) {
+			logrus.Infof("NATS discovered servers: %v", nc.Servers())
+		}),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			logrus.Errorf("NATS error callback: %s", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			logrus.Infof("NATS reconnected: %v", nc.ConnectedUrl())
+		}),
+	)
+
 	nc, err := nats.Connect(config.clientURL, nopts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS server: %w", err)

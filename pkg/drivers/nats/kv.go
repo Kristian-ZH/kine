@@ -310,7 +310,7 @@ func (e *KeyValue) btreeWatcher(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 
 		case x := <-w.Updates():
 			if x == nil {

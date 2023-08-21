@@ -359,14 +359,15 @@ func (b *Backend) Watch(ctx context.Context, prefix string, startRevision int64)
 			if err == nil {
 				break
 			}
-			b.l.Warnf("watch: prefix=%s, err=%s", prefix, err)
+			b.l.Warnf("watch init: prefix=%s, err=%s", prefix, err)
 			time.Sleep(time.Second)
 		}
 
 		for {
 			select {
 			case <-ctx.Done():
-				if err := ctx.Err(); err != nil {
+				err := ctx.Err()
+				if err != nil && err != context.Canceled {
 					b.l.Warnf("watch ctx: prefix=%s, err=%s", prefix, err)
 				}
 				return
