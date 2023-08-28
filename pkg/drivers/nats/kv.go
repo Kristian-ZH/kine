@@ -222,7 +222,7 @@ func (e *KeyValue) Watch(ctx context.Context, keys string, startRev int64) (nats
 
 	wctx, cancel := context.WithCancel(ctx)
 
-	updates := make(chan nats.KeyValueEntry, 32)
+	updates := make(chan nats.KeyValueEntry, 100)
 	subjectPrefix := fmt.Sprintf("$KV.%s.", e.nkv.Bucket())
 
 	handler := func(msg *nats.Msg) {
@@ -298,7 +298,7 @@ func (e *KeyValue) BucketRevision() int64 {
 }
 
 func (e *KeyValue) btreeWatcher(ctx context.Context) error {
-	w, err := e.nkv.WatchAll(nats.IncludeHistory(), nats.Context(ctx))
+	w, err := e.Watch(ctx, "/", int64(e.lastSeq))
 	if err != nil {
 		return err
 	}
@@ -320,21 +320,12 @@ func (e *KeyValue) btreeWatcher(ctx context.Context) error {
 			seq := x.Revision()
 			op := x.Operation()
 
-			key, err := e.kc.Decode(x.Key())
-			if err != nil {
-				continue
-			}
+			key := x.Key()
 
 			var ex time.Time
 			if op == nats.KeyValuePut {
-				xe := entry{
-					kc:    e.kc,
-					vc:    e.vc,
-					entry: x,
-				}
-
 				var nd natsData
-				err = nd.Decode(&xe)
+				err = nd.Decode(x)
 				if err != nil {
 					continue
 				}
@@ -467,11 +458,12 @@ func (e *KeyValue) List(prefix, startKey string, limit, revision int64) ([]nats.
 		}
 	}
 
-	entries := make([]nats.KeyValueEntry, 0, len(matches))
+	var entries []nats.KeyValueEntry
 	for _, m := range matches {
 		e, err := e.GetRevision(m.key, m.seq)
 		if err != nil {
-			return nil, err
+			logrus.Errorf("get revision in list error: %s @ %d: %v", m.key, m.seq, err)
+			continue
 		}
 		entries = append(entries, e)
 	}
@@ -491,9 +483,11 @@ func NewKeyValue(ctx context.Context, bucket nats.KeyValue, js nats.JetStreamCon
 	go func() {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		err := kv.btreeWatcher(ctx)
-		if err != nil {
-			panic(err)
+		for {
+			err := kv.btreeWatcher(ctx)
+			if err != nil {
+				logrus.Errorf("btree watcher error: %v", err)
+			}
 		}
 	}()
 
