@@ -66,7 +66,8 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	// Run an embedded server if available and not disabled.
 	var ns natsserver.Server
-	var cancel context.CancelFunc
+	cancel := func() {}
+
 	if !legacy && natsserver.Embedded && !config.noEmbed {
 		logrus.Infof("using an embedded NATS server")
 
@@ -131,17 +132,13 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	nc, err := nats.Connect(config.clientURL, nopts...)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
+		cancel()
 		return nil, fmt.Errorf("failed to connect to NATS server: %w", err)
 	}
 
 	js, err := jetstream.New(nc)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
+		cancel()
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
@@ -169,6 +166,7 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 			continue
 		}
 		if err != nil {
+			cancel()
 			return nil, fmt.Errorf("failed to initialize KV bucket: %w", err)
 		}
 	}
@@ -182,9 +180,10 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 	l := logrus.StandardLogger()
 
 	backend := Backend{
-		l:  l,
-		kv: ekv,
-		js: js,
+		l:      l,
+		kv:     ekv,
+		js:     js,
+		cancel: cancel,
 	}
 
 	if ns != nil {
@@ -193,7 +192,7 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		signal.Notify(sigch, os.Interrupt)
 		go func() {
 			<-sigch
-			cancel()
+			backend.Close()
 			ns.Shutdown()
 			logrus.Infof("embedded NATS server shutdown")
 		}()

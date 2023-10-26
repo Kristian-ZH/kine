@@ -50,10 +50,16 @@ var (
 )
 
 type Backend struct {
-	nc *nats.Conn
-	js jetstream.JetStream
-	kv *KeyValue
-	l  *logrus.Logger
+	nc     *nats.Conn
+	js     jetstream.JetStream
+	kv     *KeyValue
+	l      *logrus.Logger
+	cancel context.CancelFunc
+}
+
+func (b *Backend) Close() error {
+	b.cancel()
+	return b.nc.Drain()
 }
 
 // isExpiredKey checks if the key is expired based on the create time and lease.
