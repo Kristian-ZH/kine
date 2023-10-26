@@ -7,6 +7,7 @@ import (
 
 	"github.com/k3s-io/kine/pkg/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 )
 
@@ -26,7 +27,7 @@ func (d *natsData) Encode() ([]byte, error) {
 	return buf, err
 }
 
-func (d *natsData) Decode(e nats.KeyValueEntry) error {
+func (d *natsData) Decode(e jetstream.KeyValueEntry) error {
 	if e == nil || e.Value() == nil {
 		return nil
 	}
@@ -50,7 +51,7 @@ var (
 
 type Backend struct {
 	nc *nats.Conn
-	js nats.JetStreamContext
+	js jetstream.JetStream
 	kv *KeyValue
 	l  *logrus.Logger
 }
@@ -68,15 +69,15 @@ func (b *Backend) isExpiredKey(value *natsData) bool {
 // This takes into account entries that have been marked as deleted or expired.
 func (b *Backend) get(ctx context.Context, key string, revision int64, allowDeletes bool) (int64, *natsData, error) {
 	var (
-		entry nats.KeyValueEntry
+		entry jetstream.KeyValueEntry
 		err   error
 	)
 
 	// Get latest revision if not specified.
 	if revision <= 0 {
-		entry, err = b.kv.Get(key)
+		entry, err = b.kv.Get(ctx, key)
 	} else {
-		entry, err = b.kv.GetRevision(key, uint64(revision))
+		entry, err = b.kv.GetRevision(ctx, key, uint64(revision))
 	}
 	if err != nil {
 		return 0, nil, err
@@ -91,16 +92,16 @@ func (b *Backend) get(ctx context.Context, key string, revision int64, allowDele
 	}
 
 	if val.Delete && !allowDeletes {
-		return 0, nil, nats.ErrKeyNotFound
+		return 0, nil, jetstream.ErrKeyNotFound
 	}
 
 	if b.isExpiredKey(&val) {
-		err := b.kv.Delete(val.KV.Key, nats.LastRevision(uint64(rev)))
+		err := b.kv.Delete(ctx, val.KV.Key, jetstream.LastRevision(uint64(rev)))
 		if err != nil {
 			b.l.Warnf("Failed to delete expired key %s: %v", val.KV.Key, err)
 		}
 		// Return a zero indicating the key was deleted.
-		return 0, nil, nats.ErrKeyNotFound
+		return 0, nil, jetstream.ErrKeyNotFound
 	}
 
 	return rev, &val, nil
@@ -118,13 +119,13 @@ func (b *Backend) Start(ctx context.Context) error {
 }
 
 // DbSize get the kineBucket size from JetStream.
-func (b *Backend) DbSize(context.Context) (int64, error) {
-	return b.kv.BucketSize()
+func (b *Backend) DbSize(ctx context.Context) (int64, error) {
+	return b.kv.BucketSize(ctx)
 }
 
 // Count returns an exact count of the number of matching keys and the current revision of the database.
 func (b *Backend) Count(ctx context.Context, prefix string) (int64, int64, error) {
-	count, err := b.kv.Count(prefix)
+	count, err := b.kv.Count(ctx, prefix)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -144,7 +145,7 @@ func (b *Backend) Get(ctx context.Context, key, rangeEnd string, limit, revision
 		}
 		return rev, nv.KV, nil
 	}
-	if err == nats.ErrKeyNotFound {
+	if err == jetstream.ErrKeyNotFound {
 		return storeRev, nil, nil
 	}
 
@@ -157,7 +158,7 @@ func (b *Backend) Create(ctx context.Context, key string, value []byte, lease in
 	// the revision will be returned to apply an update.
 	rev, pnv, err := b.get(ctx, key, 0, true)
 	// If an error other than key not found, return.
-	if err != nil && err != nats.ErrKeyNotFound {
+	if err != nil && err != jetstream.ErrKeyNotFound {
 		return 0, err
 	}
 
@@ -187,7 +188,7 @@ func (b *Backend) Create(ctx context.Context, key string, value []byte, lease in
 	}
 
 	if pnv != nil {
-		seq, err := b.kv.Update(key, data, uint64(rev))
+		seq, err := b.kv.Update(ctx, key, data, uint64(rev))
 		if err != nil {
 			if jsWrongLastSeqErr.Is(err) {
 				b.l.Warnf("create conflict: key=%s, rev=%d, err=%s", key, rev, err)
@@ -200,7 +201,7 @@ func (b *Backend) Create(ctx context.Context, key string, value []byte, lease in
 	}
 
 	// An update with a zero revision will create the key.
-	seq, err := b.kv.Create(key, data)
+	seq, err := b.kv.Create(ctx, key, data)
 	if err != nil {
 		if jsWrongLastSeqErr.Is(err) {
 			b.l.Warnf("create conflict: key=%s, rev=0, err=%s", key, err)
@@ -216,7 +217,7 @@ func (b *Backend) Delete(ctx context.Context, key string, revision int64) (int64
 	// Get the key, allow deletes.
 	rev, value, err := b.get(ctx, key, 0, true)
 	if err != nil {
-		if err == nats.ErrKeyNotFound {
+		if err == jetstream.ErrKeyNotFound {
 			return rev, nil, true, nil
 		}
 		return rev, nil, false, err
@@ -242,7 +243,7 @@ func (b *Backend) Delete(ctx context.Context, key string, revision int64) (int64
 	}
 
 	// Update with a tombstone.
-	drev, err := b.kv.Update(key, data, uint64(rev))
+	drev, err := b.kv.Update(ctx, key, data, uint64(rev))
 	if err != nil {
 		if jsWrongLastSeqErr.Is(err) {
 			b.l.Warnf("delete conflict: key=%s, rev=%d, err=%s", key, rev, err)
@@ -251,7 +252,7 @@ func (b *Backend) Delete(ctx context.Context, key string, revision int64) (int64
 		return rev, value.KV, false, nil
 	}
 
-	err = b.kv.Delete(key, nats.LastRevision(drev))
+	err = b.kv.Delete(ctx, key, jetstream.LastRevision(drev))
 	if err != nil {
 		if jsWrongLastSeqErr.Is(err) {
 			b.l.Warnf("delete conflict: key=%s, rev=%d, err=%s", key, drev, err)
@@ -268,7 +269,7 @@ func (b *Backend) Update(ctx context.Context, key string, value []byte, revision
 	rev, pnd, err := b.get(ctx, key, 0, false)
 	// TODO: correct semantics for these various errors?
 	if err != nil {
-		if err == nats.ErrKeyNotFound {
+		if err == jetstream.ErrKeyNotFound {
 			return rev, nil, false, nil
 		}
 		return rev, nil, false, err
@@ -305,7 +306,7 @@ func (b *Backend) Update(ctx context.Context, key string, value []byte, revision
 		return 0, nil, false, err
 	}
 
-	seq, err := b.kv.Update(key, data, uint64(revision))
+	seq, err := b.kv.Update(ctx, key, data, uint64(revision))
 	if err != nil {
 		// This may occur if a concurrent writer created the key.
 		if jsWrongLastSeqErr.Is(err) {
@@ -327,7 +328,7 @@ func (b *Backend) Update(ctx context.Context, key string, value []byte, revision
 // If limit is provided, the maximum set of matches is limited.
 // If revision is provided, this indicates the maximum revision to return.
 func (b *Backend) List(ctx context.Context, prefix, startKey string, limit, maxRevision int64) (int64, []*server.KeyValue, error) {
-	matches, err := b.kv.List(prefix, startKey, limit, maxRevision)
+	matches, err := b.kv.List(ctx, prefix, startKey, limit, maxRevision)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -352,7 +353,7 @@ func (b *Backend) Watch(ctx context.Context, prefix string, startRevision int64)
 	go func() {
 		defer close(events)
 
-		var w nats.KeyWatcher
+		var w jetstream.KeyWatcher
 		for {
 			var err error
 			w, err = b.kv.Watch(ctx, prefix, startRevision)
@@ -373,7 +374,7 @@ func (b *Backend) Watch(ctx context.Context, prefix string, startRevision int64)
 				return
 
 			case e := <-w.Updates():
-				if e.Operation() != nats.KeyValuePut {
+				if e.Operation() != jetstream.KeyValuePut {
 					continue
 				}
 

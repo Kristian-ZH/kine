@@ -11,6 +11,7 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 	"github.com/k3s-io/kine/pkg/tls"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,19 +24,19 @@ const (
 
 var (
 	// Missing errors in the nats.go client library.
-	jsClusterNotAvailErr = &nats.APIError{
+	jsClusterNotAvailErr = &jetstream.APIError{
 		Code:      503,
 		ErrorCode: 10008,
 	}
 
-	jsNoSuitablePeersErr = &nats.APIError{
+	jsNoSuitablePeersErr = &jetstream.APIError{
 		Code:      400,
 		ErrorCode: 10005,
 	}
 
-	jsWrongLastSeqErr = &nats.APIError{
+	jsWrongLastSeqErr = &jetstream.APIError{
 		Code:      400,
-		ErrorCode: nats.JSErrCodeStreamWrongLastSequence,
+		ErrorCode: jetstream.JSErrCodeStreamWrongLastSequence,
 	}
 )
 
@@ -57,13 +58,19 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		return nil, err
 	}
 
-	nopts := append(config.clientOptions, nats.Name("kine using bucket: "+config.bucket))
+	nopts := append(
+		config.clientOptions,
+		nats.Name("kine using bucket: "+config.bucket),
+		nats.MaxReconnects(-1),
+	)
 
 	// Run an embedded server if available and not disabled.
+	var ns natsserver.Server
+	var cancel context.CancelFunc
 	if !legacy && natsserver.Embedded && !config.noEmbed {
 		logrus.Infof("using an embedded NATS server")
 
-		ns, err := natsserver.New(&natsserver.Config{
+		ns, err = natsserver.New(&natsserver.Config{
 			Host:          config.host,
 			Port:          config.port,
 			ConfigFile:    config.serverConfig,
@@ -95,17 +102,10 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 			logrus.Infof("waiting for embedded NATS server to be ready: %d", retries)
 		}
 
-		// TODO: No method on backend.Driver exists to indicate a shutdown.
-		sigch := make(chan os.Signal, 1)
-		signal.Notify(sigch, os.Interrupt)
-		go func() {
-			<-sigch
-			ns.Shutdown()
-			logrus.Infof("embedded NATS server shutdown")
-		}()
-
 		// Use the local server's client URL.
 		config.clientURL = ns.ClientURL()
+
+		ctx, cancel = context.WithCancel(ctx)
 	}
 
 	if !config.dontListen {
@@ -131,19 +131,25 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 
 	nc, err := nats.Connect(config.clientURL, nopts...)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("failed to connect to NATS server: %w", err)
 	}
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
 	// Create the bucket if it doesn't exist. Note, this is a no-op if the bucket
 	// already exists with the same configuration.
-	var bucket nats.KeyValue
+	var bucket jetstream.KeyValue
 	for {
-		bucket, err = js.CreateKeyValue(&nats.KeyValueConfig{
+		bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 			Bucket:      config.bucket,
 			Description: "Holds kine key/values",
 			History:     config.revHistory,
@@ -179,6 +185,18 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		l:  l,
 		kv: ekv,
 		js: js,
+	}
+
+	if ns != nil {
+		// TODO: No method on backend.Driver exists to indicate a shutdown.
+		sigch := make(chan os.Signal, 1)
+		signal.Notify(sigch, os.Interrupt)
+		go func() {
+			<-sigch
+			cancel()
+			ns.Shutdown()
+			logrus.Infof("embedded NATS server shutdown")
+		}()
 	}
 
 	return &BackendLogger{

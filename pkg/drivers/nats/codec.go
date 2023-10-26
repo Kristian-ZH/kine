@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/s2"
-	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/shengdoushi/base58"
 )
 
@@ -33,7 +33,7 @@ func (e *keyCodec) EncodeRange(prefix string) (string, error) {
 
 func (*keyCodec) Encode(key string) (retKey string, e error) {
 	if key == "" {
-		return "", nats.ErrInvalidKey
+		return "", jetstream.ErrInvalidKey
 	}
 
 	// Trim leading and trailing slashes.
@@ -45,7 +45,7 @@ func (*keyCodec) Encode(key string) (retKey string, e error) {
 	}
 
 	if len(parts) == 0 {
-		return "", nats.ErrInvalidKey
+		return "", jetstream.ErrInvalidKey
 	}
 
 	return strings.Join(parts, "."), nil
@@ -63,7 +63,7 @@ func (*keyCodec) Decode(key string) (retKey string, e error) {
 	}
 
 	if len(parts) == 0 {
-		return "", nats.ErrInvalidKey
+		return "", jetstream.ErrInvalidKey
 	}
 
 	return fmt.Sprintf("/%s", strings.Join(parts, "/")), nil

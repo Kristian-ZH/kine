@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 )
 
@@ -73,16 +74,17 @@ func setupBackend(t *testing.T) (*server.Server, *nats.Conn, *Backend) {
 	nc, err := nats.Connect(ns.ClientURL())
 	noErr(t, err)
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	noErr(t, err)
 
-	bkt, err := js.CreateKeyValue(&nats.KeyValueConfig{
+	ctx := context.Background()
+
+	bkt, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:  "kine",
 		History: 10,
 	})
 	noErr(t, err)
 
-	ctx := context.Background()
 	ekv := NewKeyValue(ctx, bkt, js)
 
 	l := logrus.New()
@@ -372,5 +374,5 @@ func TestBackend_Watch(t *testing.T) {
 		events = append(events, es...)
 	}
 
-	expEqual(t, 1, len(events))
+	expEqual(t, 5, len(events))
 }
