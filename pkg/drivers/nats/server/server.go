@@ -4,14 +4,64 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/sirupsen/logrus"
 )
 
 const (
 	Embedded = true
 )
+
+type responseWriter struct {
+	code   int
+	header http.Header
+	body   *bytes.Buffer
+}
+
+func (w *responseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *responseWriter) Write(b []byte) (int, error) {
+	return w.body.Write(b)
+}
+
+func (w *responseWriter) WriteHeader(code int) {
+	w.code = code
+}
+
+type embeddedServer struct {
+	*server.Server
+}
+
+func (s *embeddedServer) Ready() bool {
+	rw := responseWriter{
+		header: http.Header{},
+		body:   &bytes.Buffer{},
+	}
+
+	r := http.Request{
+		Method: "GET",
+		URL: &url.URL{
+			Path: "/healthz",
+		},
+		Header: http.Header{},
+	}
+
+	s.Server.HandleHealthz(&rw, &r)
+
+	var hs server.HealthStatus
+	json.NewDecoder(rw.body).Decode(&hs)
+	logrus.Debugf("embedded NATS server health: %#v", hs)
+
+	return hs.Status == "ok"
+}
 
 func New(c *Config) (Server, error) {
 	opts := &server.Options{}
@@ -52,5 +102,5 @@ func New(c *Config) (Server, error) {
 		srv.ConfigureLogger()
 	}
 
-	return srv, nil
+	return &embeddedServer{Server: srv}, nil
 }

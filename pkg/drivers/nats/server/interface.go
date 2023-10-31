@@ -2,16 +2,13 @@ package server
 
 import (
 	"net"
-	"time"
 )
 
 type Server interface {
 	Start()
+	Ready() bool
 	Shutdown()
 	ClientURL() string
-	ReadyForConnections(wait time.Duration) bool
-	JetStreamIsCurrent() bool
-	JetStreamIsStreamCurrent(account, stream string) bool
 	InProcessConn() (net.Conn, error)
 }
 
