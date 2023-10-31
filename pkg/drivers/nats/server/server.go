@@ -44,9 +44,13 @@ func New(c *Config) (Server, error) {
 	}
 
 	srv, err := server.NewServer(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	if c.StdoutLogging {
 		srv.ConfigureLogger()
 	}
 
-	return srv, err
+	return srv, nil
 }

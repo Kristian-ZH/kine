@@ -171,14 +171,14 @@ func newBackend(ctx context.Context, connection string, tlsInfo tls.Config, lega
 		}
 	}
 
+	logrus.Infof("bucket initialized: %s", config.bucket)
+
 	if ns != nil {
-		for !ns.JetStreamIsCurrent() || !ns.JetStreamIsStreamCurrent("", fmt.Sprintf("KV_%s", config.bucket)) {
+		for !ns.JetStreamIsCurrent() || !ns.JetStreamIsStreamCurrent("$G", fmt.Sprintf("KV_%s", config.bucket)) {
 			logrus.Warnf("waiting for JetStream to be current")
 			time.Sleep(time.Second)
 		}
 	}
-
-	logrus.Infof("bucket initialized: %s", config.bucket)
 
 	ekv := NewKeyValue(ctx, bucket, js)
 
